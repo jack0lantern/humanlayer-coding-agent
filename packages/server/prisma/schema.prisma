@@ -1,0 +1,73 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum AgentStatus {
+  online
+  offline
+}
+
+enum SessionStatus {
+  pending
+  running
+  completed
+  stopped
+  failed
+}
+
+enum EventType {
+  thinking
+  text
+  tool_call
+  tool_result
+  error
+  session_complete
+}
+
+model Agent {
+  id            String      @id @default(uuid())
+  name          String      @default("default")
+  status        AgentStatus @default(offline)
+  workingDir    String?     @map("working_dir")
+  connectedAt   DateTime?   @map("connected_at")
+  lastHeartbeat DateTime?   @map("last_heartbeat")
+  createdAt     DateTime    @default(now()) @map("created_at")
+  updatedAt     DateTime    @updatedAt @map("updated_at")
+  sessions      Session[]
+
+  @@map("agents")
+}
+
+model Session {
+  id         String        @id @default(uuid())
+  agentId    String?       @map("agent_id")
+  agent      Agent?        @relation(fields: [agentId], references: [id])
+  prompt     String
+  status     SessionStatus @default(pending)
+  createdAt  DateTime      @default(now()) @map("created_at")
+  startedAt  DateTime?     @map("started_at")
+  finishedAt DateTime?     @map("finished_at")
+  updatedAt  DateTime      @updatedAt @map("updated_at")
+  events     Event[]
+
+  @@index([status])
+  @@map("sessions")
+}
+
+model Event {
+  id        String    @id @default(uuid())
+  sessionId String    @map("session_id")
+  session   Session   @relation(fields: [sessionId], references: [id])
+  type      EventType
+  data      Json      @default("{}")
+  sequence  Int
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@index([sessionId, sequence])
+  @@map("events")
+}

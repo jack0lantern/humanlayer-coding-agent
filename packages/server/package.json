@@ -1,0 +1,29 @@
+{
+  "name": "@codingagent/server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "db:generate": "prisma generate",
+    "db:push": "prisma db push",
+    "db:migrate": "prisma migrate deploy"
+  },
+  "dependencies": {
+    "@codingagent/shared": "*",
+    "@hono/node-server": "^1.13.8",
+    "@hono/node-ws": "^1.1.1",
+    "@prisma/client": "^6.4.1",
+    "hono": "^4.7.4",
+    "ws": "^8.18.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "@types/ws": "^8.5.14",
+    "prisma": "^6.4.1",
+    "tsx": "^4.19.3"
+  }
+}
