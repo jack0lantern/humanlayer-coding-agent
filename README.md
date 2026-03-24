@@ -133,6 +133,30 @@ npm run dev
 - **File diff view** — show file changes made by the agent
 - **Session resume** — continue a completed session with follow-up prompts
 
+## Golden Path Evals
+
+The `packages/evals` package contains 18 golden path evaluation tests that run the agent against real prompts and validate actual LLM output. Each test:
+
+1. Creates an isolated temp workspace (with optional setup files)
+2. Runs the agent via `runAgentLoop` with a specific prompt
+3. Asserts on session completion, tool usage, file contents, and text output
+4. Cleans up the temp directory
+
+**Requirements:** `ANTHROPIC_API_KEY` must be set. Tests are skipped if it's missing.
+
+```bash
+# Run all golden path evals (builds first)
+npm run evals
+
+# Watch mode for iterative development
+npm run evals:watch
+
+# Run a single test by name
+cd packages/evals && npx vitest run -t "1. Creates"
+```
+
+Tests are slow (~30s–2min each) since they invoke the real Claude API. Use `evals:watch` to run a subset during development.
+
 ## Coding Agent Usage
 
 This project was built with the assistance of Claude Code (Anthropic's CLI coding agent). The `.claude/` directory contains the configuration used during development.

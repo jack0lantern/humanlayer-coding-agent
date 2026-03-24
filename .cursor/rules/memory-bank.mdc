@@ -1,0 +1,22 @@
+---
+description: Read memory bank files for project context at the start of tasks
+alwaysApply: false
+---
+
+# Memory Bank
+
+When starting a substantial task or when context is unclear, read the memory bank files in `memory-bank/`:
+
+- **projectbrief.md** — Project overview, requirements, goals, scope
+- **productContext.md** — Why the project exists, problems it solves, UX goals
+- **activeContext.md** — Current focus, recent changes, next steps
+- **systemPatterns.md** — Architecture, design decisions, component relationships
+- **techContext.md** — Tech stack, setup, constraints, dependencies
+- **progress.md** — What works, what's left, known issues
+
+**Update the memory bank** when:
+- Completing significant implementation work
+- Making architectural or design decisions
+- When the user says **update memory bank** (review ALL files)
+
+Prioritize updating `activeContext.md` and `progress.md` to reflect current state.

@@ -3,3 +3,5 @@ dist/
 .env
 .DS_Store
 *.tsbuildinfo
+STUDY_GUIDE.md
+.server-port

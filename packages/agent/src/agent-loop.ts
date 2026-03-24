@@ -1,6 +1,15 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { toolDefinitions } from "./tools/definitions.js";
 import { executeTool } from "./tools/executor.js";
+import {
+  validatePromptSize,
+  truncateToolResult,
+  needsCompaction,
+  compactMessageHistory,
+  MAX_ITERATIONS,
+  MODEL_CONTEXT_LIMIT,
+  RESERVED_TOKENS,
+} from "./context-window.js";
 import type { SessionEvent } from "@codingagent/shared";
 
 interface AgentLoopOptions {
@@ -9,6 +18,8 @@ interface AgentLoopOptions {
   apiKey: string;
   onEvent: (event: SessionEvent) => void;
   shouldStop: () => boolean;
+  /** Override max iterations (default: MAX_ITERATIONS from context-window). */
+  maxIterations?: number;
 }
 
 const SYSTEM_PROMPT = `You are a coding agent running inside a workspace directory. You can read files, write files, execute shell commands, and list directories.
@@ -30,8 +41,95 @@ Guidelines:
 
 You are working in the directory that was provided to you. All file paths should be relative to this directory unless absolute paths are necessary.`;
 
+// ---------------------------------------------------------------------------
+// Retry helpers
+// ---------------------------------------------------------------------------
+
+/** HTTP status codes that are safe to retry. */
+const RETRYABLE_STATUS_CODES = new Set([429, 529, 500, 502, 503]);
+
+function isRetryableError(error: unknown): boolean {
+  if (error instanceof Anthropic.APIError) {
+    return RETRYABLE_STATUS_CODES.has(error.status);
+  }
+  // Network errors
+  if (error instanceof Error) {
+    const msg = error.message.toLowerCase();
+    return (
+      msg.includes("econnreset") ||
+      msg.includes("socket hang up") ||
+      msg.includes("etimedout")
+    );
+  }
+  return false;
+}
+
+async function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Call the Anthropic API with exponential-backoff retry for transient errors.
+ * Max 3 retries with delays of ~2s, 4s, 8s (plus jitter).
+ */
+async function callWithRetry(
+  client: Anthropic,
+  params: Anthropic.MessageCreateParamsNonStreaming,
+  maxRetries: number = 3
+): Promise<Anthropic.Message> {
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await client.messages.create(params);
+    } catch (error) {
+      lastError = error;
+      if (attempt < maxRetries && isRetryableError(error)) {
+        // Extract retry-after header if available (APIError exposes headers)
+        let delayMs = Math.pow(2, attempt + 1) * 1000;
+        if (error instanceof Anthropic.APIError) {
+          const retryAfter = error.headers?.["retry-after"];
+          if (retryAfter) {
+            const parsed = parseInt(retryAfter, 10);
+            if (!isNaN(parsed)) delayMs = parsed * 1000;
+          }
+        }
+        // Add jitter
+        delayMs += Math.random() * 1000;
+        await sleep(delayMs);
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw lastError;
+}
+
+// ---------------------------------------------------------------------------
+// Main agent loop
+// ---------------------------------------------------------------------------
+
 export async function runAgentLoop(options: AgentLoopOptions): Promise<void> {
-  const { prompt, workingDir, apiKey, onEvent, shouldStop } = options;
+  const {
+    prompt,
+    workingDir,
+    apiKey,
+    onEvent,
+    shouldStop,
+    maxIterations = MAX_ITERATIONS,
+  } = options;
+
+  // --- Validate prompt size ---
+  const promptCheck = validatePromptSize(prompt);
+  if (!promptCheck.valid) {
+    onEvent({ type: "error", message: promptCheck.error! });
+    onEvent({
+      type: "session_complete",
+      status: "failed",
+      summary: promptCheck.error!,
+    });
+    return;
+  }
 
   const client = new Anthropic({ apiKey });
 
@@ -39,9 +137,37 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<void> {
     { role: "user", content: prompt },
   ];
 
+  let iteration = 0;
+
   while (!shouldStop()) {
+    // --- Guard: max iterations ---
+    if (iteration >= maxIterations) {
+      onEvent({
+        type: "error",
+        message: `Agent reached maximum iteration limit (${maxIterations}). Stopping to prevent runaway execution.`,
+      });
+      onEvent({
+        type: "session_complete",
+        status: "failed",
+        summary: `Reached max iteration limit (${maxIterations})`,
+      });
+      return;
+    }
+    iteration++;
+
     try {
-      const response = await client.messages.create({
+      // --- Guard: compact history if approaching context limit ---
+      if (needsCompaction(messages, MODEL_CONTEXT_LIMIT - RESERVED_TOKENS)) {
+        const compacted = await compactMessageHistory(
+          client,
+          messages,
+          MODEL_CONTEXT_LIMIT - RESERVED_TOKENS
+        );
+        messages.length = 0;
+        messages.push(...compacted);
+      }
+
+      const response = await callWithRetry(client, {
         model: "claude-sonnet-4-20250514",
         max_tokens: 8096,
         system: SYSTEM_PROMPT,
@@ -80,17 +206,20 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<void> {
             workingDir
           );
 
+          // Truncate tool results to avoid context blowup
+          const truncatedOutput = truncateToolResult(result.output);
+
           onEvent({
             type: "tool_result",
             toolCallId: block.id,
-            output: result.output,
+            output: truncatedOutput,
             isError: result.isError,
           });
 
           toolResults.push({
             type: "tool_result",
             tool_use_id: block.id,
-            content: result.output,
+            content: truncatedOutput,
             is_error: result.isError,
           });
         }

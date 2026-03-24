@@ -1,4 +1,11 @@
-import { serve } from "@hono/node-server";
+import { config } from "dotenv";
+import { writeFileSync } from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+config({ path: path.resolve(__dirname, "../../../.env") });
+import { createAdaptorServer } from "@hono/node-server";
 import { createNodeWebSocket } from "@hono/node-ws";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
@@ -34,19 +41,61 @@ app.get(
   }))
 );
 
-const port = parseInt(process.env.SERVER_PORT || "3000", 10);
+const basePort = parseInt(process.env.SERVER_PORT ?? "3000", 10);
+
+function listenOnPort(server: ReturnType<typeof createAdaptorServer>, port: number) {
+  return new Promise<number>((resolve, reject) => {
+    server.once("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "EADDRINUSE") reject(err);
+      else reject(err);
+    });
+    server.once("listening", () => {
+      const addr = server.address();
+      const actualPort = typeof addr === "object" && addr?.port ? addr.port : port;
+      resolve(actualPort);
+    });
+    server.listen(port);
+  });
+}
 
 async function start() {
   await ensureConnection();
 
-  const server = serve({
-    fetch: app.fetch,
-    port,
-  });
+  const serverOptions = {
+    maxHeaderSize: 32768,
+  };
 
-  injectWebSocket(server);
+  let boundPort = basePort;
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const server = createAdaptorServer({
+      fetch: app.fetch,
+      serverOptions,
+    });
 
-  console.log(`Server running on port ${port}`);
+    try {
+      boundPort = await listenOnPort(server, boundPort);
+      injectWebSocket(server);
+
+      const portFile = path.resolve(__dirname, "../../../.server-port");
+      writeFileSync(portFile, JSON.stringify({ port: boundPort }), "utf8");
+
+      console.log(
+        boundPort !== basePort
+          ? `Server running on port ${boundPort} (${basePort} was occupied)`
+          : `Server running on port ${boundPort}`
+      );
+      return;
+    } catch (err) {
+      const nodeErr = err as NodeJS.ErrnoException;
+      if (nodeErr?.code === "EADDRINUSE") {
+        boundPort++;
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  throw new Error(`No available port in range ${basePort}-${basePort + 99}`);
 }
 
 start().catch((err) => {

@@ -48,6 +48,17 @@ sessions.post("/", async (c) => {
     return c.json({ error: "prompt is required" }, 400);
   }
 
+  // Reject prompts that are too large (100k tokens ≈ 300k chars)
+  const MAX_PROMPT_CHARS = 300_000;
+  if (body.prompt.length > MAX_PROMPT_CHARS) {
+    return c.json(
+      {
+        error: `Prompt is too large (${body.prompt.length} characters, max ${MAX_PROMPT_CHARS}). Please shorten your request.`,
+      },
+      400
+    );
+  }
+
   const session = await prisma.session.create({
     data: { prompt: body.prompt.trim() },
   });
@@ -136,26 +147,48 @@ sessions.get("/:id/events", async (c) => {
 });
 
 // GET /api/sessions/:id/stream - SSE endpoint for live events
+// Supports ?after=<sequence> to paginate backfill (only events with sequence > after are sent).
 sessions.get("/:id/stream", async (c) => {
   const sessionId = c.req.param("id");
+  const afterParam = c.req.query("after");
+  const afterSequence = afterParam ? parseInt(afterParam, 10) : 0;
+
   const session = await prisma.session.findUnique({
     where: { id: sessionId },
   });
   if (!session) return c.json({ error: "Session not found" }, 404);
 
+  /** Max events to backfill per connection to avoid oversized responses. */
+  const BACKFILL_LIMIT = 200;
+
   return streamSSE(c, async (stream) => {
-    // Send existing events as backfill
+    // Send existing events as backfill, paginated
     const existingEvents = await prisma.event.findMany({
-      where: { sessionId },
+      where: {
+        sessionId,
+        ...(afterSequence > 0 ? { sequence: { gt: afterSequence } } : {}),
+      },
       orderBy: { sequence: "asc" },
+      take: BACKFILL_LIMIT,
     });
 
     for (const event of existingEvents) {
       await stream.writeSSE({
         event: "event",
         data: JSON.stringify({ event: toEventDTO(event) }),
+        id: String(event.sequence),
       });
     }
+
+    // Tell the client if there are more events to fetch
+    const lastSequence = existingEvents.length > 0
+      ? existingEvents[existingEvents.length - 1].sequence
+      : afterSequence;
+    const hasMore = existingEvents.length === BACKFILL_LIMIT;
+    await stream.writeSSE({
+      event: "backfill_done",
+      data: JSON.stringify({ lastSequence, hasMore }),
+    });
 
     // Send current session status
     await stream.writeSSE({

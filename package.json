@@ -6,15 +6,19 @@
     "packages/shared",
     "packages/server",
     "packages/agent",
-    "packages/web"
+    "packages/web",
+    "packages/evals"
   ],
   "scripts": {
-    "dev": "concurrently \"npm run dev -w packages/server\" \"npm run dev -w packages/agent\" \"npm run dev -w packages/web\"",
+    "dev": "concurrently \"npm run dev -w packages/server\" \"wait-on .server-port && concurrently \\\"npm run dev -w packages/agent\\\" \\\"npm run dev -w packages/web\\\"\"",
     "build": "npm run build -w packages/shared && npm run build -w packages/server && npm run build -w packages/agent && npm run build -w packages/web",
-    "setup": "npm install && npm run db:generate -w packages/server && npm run db:push -w packages/server"
+    "setup": "npm install && npm run db:generate -w packages/server && npm run db:push -w packages/server",
+    "evals": "npm run build && npm run test -w packages/evals",
+    "evals:watch": "npm run test:watch -w packages/evals"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",
-    "typescript": "^5.7.3"
+    "typescript": "^5.7.3",
+    "wait-on": "^8.0.1"
   }
 }

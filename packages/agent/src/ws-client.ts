@@ -7,6 +7,42 @@ import type {
   SessionEvent,
 } from "@codingagent/shared";
 
+/** Maximum WebSocket message size (1 MB). Larger payloads are truncated. */
+const MAX_WS_MESSAGE_SIZE = 1024 * 1024;
+
+/**
+ * Truncate an event payload if the serialized message would exceed WS limits.
+ * Replaces large string fields with a truncation notice.
+ */
+function truncateEventForWS(event: SessionEvent): SessionEvent {
+  const serialized = JSON.stringify(event);
+  if (serialized.length <= MAX_WS_MESSAGE_SIZE) return event;
+
+  // For tool_result events, truncate the output field
+  if (event.type === "tool_result") {
+    const maxOutput = MAX_WS_MESSAGE_SIZE - 500; // leave room for envelope
+    return {
+      ...event,
+      output:
+        event.output.slice(0, maxOutput) +
+        `\n... [truncated, original size: ${event.output.length} chars]`,
+    };
+  }
+
+  // For text events, truncate content
+  if (event.type === "text") {
+    const maxContent = MAX_WS_MESSAGE_SIZE - 500;
+    return {
+      ...event,
+      content:
+        event.content.slice(0, maxContent) +
+        `\n... [truncated, original size: ${event.content.length} chars]`,
+    };
+  }
+
+  return event;
+}
+
 interface WSClientOptions {
   serverUrl: string;
   workingDir: string;
@@ -75,7 +111,7 @@ export function startWSClient(options: WSClientOptions) {
                 send({
                   type: "agent:event",
                   sessionId: message.sessionId,
-                  event,
+                  event: truncateEventForWS(event),
                 });
               },
               shouldStop: () => stopFlag,
