@@ -26,6 +26,7 @@ function toSessionDTO(session: any): SessionDTO {
     createdAt: session.createdAt.toISOString(),
     startedAt: session.startedAt?.toISOString() ?? null,
     finishedAt: session.finishedAt?.toISOString() ?? null,
+    stoppedBy: session.stoppedBy ?? null,
     updatedAt: session.updatedAt.toISOString(),
   };
 }
@@ -121,12 +122,13 @@ sessions.post("/:id/stop", async (c) => {
 
   const updated = await prisma.session.update({
     where: { id: session.id },
-    data: { status: "stopped", finishedAt: new Date() },
+    data: { status: "stopped", finishedAt: new Date(), stoppedBy: "user" },
   });
 
   broadcastSSE(session.id, "session_update", {
     sessionId: session.id,
     status: "stopped",
+    stoppedBy: "user",
   });
 
   return c.json({ session: toSessionDTO(updated) });
@@ -316,12 +318,13 @@ sessions.post("/:id/end", async (c) => {
 
   const updated = await prisma.session.update({
     where: { id: session.id },
-    data: { status: "completed", finishedAt: new Date() },
+    data: { status: "completed", finishedAt: new Date(), stoppedBy: "user" },
   });
 
   broadcastSSE(session.id, "session_update", {
     sessionId: session.id,
     status: "completed",
+    stoppedBy: "user",
   });
 
   return c.json({ session: toSessionDTO(updated) });

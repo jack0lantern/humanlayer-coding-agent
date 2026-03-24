@@ -54,6 +54,7 @@ model Session {
   createdAt  DateTime      @default(now()) @map("created_at")
   startedAt  DateTime?     @map("started_at")
   finishedAt DateTime?     @map("finished_at")
+  stoppedBy  String?       @map("stopped_by")
   updatedAt  DateTime      @updatedAt @map("updated_at")
   events     Event[]
 

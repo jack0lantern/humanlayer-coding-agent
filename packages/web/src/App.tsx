@@ -61,7 +61,7 @@ export default function App() {
   });
 
   // Stream events for selected session
-  const { events, sessionStatus } = useSessionStream(selectedSessionId);
+  const { events, sessionStatus, stoppedBy } = useSessionStream(selectedSessionId);
 
   const sessions = sessionsData?.sessions || [];
   const agents = agentsData?.agents || [];
@@ -122,6 +122,7 @@ export default function App() {
             <EventStream
               events={events}
               sessionStatus={currentStatus}
+              stoppedBy={stoppedBy}
               onStop={() => stopSession.mutate(selectedSessionId)}
               onSendMessage={(message) =>
                 sendMessage.mutate({ id: selectedSessionId!, message })

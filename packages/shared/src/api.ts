@@ -25,6 +25,7 @@ export interface SessionDTO {
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;
+  stoppedBy: string | null;
   updatedAt: string;
 }
 

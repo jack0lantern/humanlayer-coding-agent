@@ -1,10 +1,48 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import type { EventDTO } from "@codingagent/shared";
 import Markdown from "react-markdown";
+
+function ConfirmDialog({
+  title,
+  message,
+  confirmLabel,
+  onConfirm,
+  onCancel,
+}: {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+      <div className="bg-zinc-900 border border-zinc-700 rounded-xl p-6 max-w-sm w-full mx-4 shadow-2xl">
+        <h3 className="text-sm font-semibold text-zinc-100">{title}</h3>
+        <p className="text-sm text-zinc-400 mt-2">{message}</p>
+        <div className="flex justify-end gap-2 mt-5">
+          <button
+            onClick={onCancel}
+            className="text-sm px-4 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            className="text-sm px-4 py-2 rounded-lg bg-red-600 hover:bg-red-500 text-white font-medium transition-colors"
+          >
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 interface EventStreamProps {
   events: EventDTO[];
   sessionStatus: string | null;
+  stoppedBy?: string | null;
   onStop: () => void;
   onSendMessage: (message: string) => void;
   onEndSession: () => void;
@@ -13,17 +51,29 @@ interface EventStreamProps {
 export function EventStream({
   events,
   sessionStatus,
+  stoppedBy,
   onStop,
   onSendMessage,
   onEndSession,
 }: EventStreamProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [confirmAction, setConfirmAction] = useState<"stop" | "end" | null>(null);
 
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [events]);
+
+  const handleConfirmedStop = useCallback(() => {
+    setConfirmAction(null);
+    onStop();
+  }, [onStop]);
+
+  const handleConfirmedEnd = useCallback(() => {
+    setConfirmAction(null);
+    onEndSession();
+  }, [onEndSession]);
 
   if (events.length === 0) {
     return (
@@ -39,6 +89,25 @@ export function EventStream({
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
+      {confirmAction === "stop" && (
+        <ConfirmDialog
+          title="Stop Agent"
+          message="This will interrupt the agent mid-task. The session will be marked as stopped and cannot be resumed."
+          confirmLabel="Stop Agent"
+          onConfirm={handleConfirmedStop}
+          onCancel={() => setConfirmAction(null)}
+        />
+      )}
+      {confirmAction === "end" && (
+        <ConfirmDialog
+          title="End Session"
+          message="This will mark the session as completed. You won't be able to send further messages."
+          confirmLabel="End Session"
+          onConfirm={handleConfirmedEnd}
+          onCancel={() => setConfirmAction(null)}
+        />
+      )}
+
       {sessionStatus === "running" && (
         <div className="flex items-center justify-between px-4 py-2 bg-zinc-900 border-b border-zinc-800">
           <div className="flex items-center gap-2">
@@ -46,10 +115,11 @@ export function EventStream({
             <span className="text-xs text-zinc-400">Running</span>
           </div>
           <button
-            onClick={onStop}
+            onClick={() => setConfirmAction("stop")}
             className="text-xs bg-red-600/20 text-red-400 hover:bg-red-600/30 px-3 py-1 rounded-md transition-colors"
+            title="Interrupt the agent mid-task and stop the session"
           >
-            Stop
+            Stop Agent
           </button>
         </div>
       )}
@@ -71,13 +141,14 @@ export function EventStream({
               }`}
             >
               Session {sessionStatus}
+              {stoppedBy && ` by ${stoppedBy}`}
             </span>
           </div>
         )}
       </div>
 
       {sessionStatus === "waiting_for_user" && (
-        <FollowUpInput onSend={onSendMessage} onEnd={onEndSession} />
+        <FollowUpInput onSend={onSendMessage} onEnd={() => setConfirmAction("end")} />
       )}
     </div>
   );
@@ -130,9 +201,10 @@ function FollowUpInput({
           <button
             type="button"
             onClick={onEnd}
-            className="bg-zinc-700 hover:bg-zinc-600 text-zinc-300 text-sm font-medium py-2 px-4 rounded-lg transition-colors"
+            className="bg-red-600/20 hover:bg-red-600/30 text-red-400 text-sm font-medium py-2 px-4 rounded-lg transition-colors border border-red-600/30"
+            title="End session — no further messages can be sent"
           >
-            End
+            End Session
           </button>
         </div>
       </form>
