@@ -66,3 +66,15 @@ export interface StopSessionResponse {
 export interface GetSessionEventsResponse {
   events: EventDTO[];
 }
+
+export interface SendMessageRequest {
+  message: string;
+}
+
+export interface SendMessageResponse {
+  session: SessionDTO;
+}
+
+export interface EndSessionResponse {
+  session: SessionDTO;
+}

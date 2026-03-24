@@ -12,6 +12,7 @@ const statusColors: Record<string, string> = {
   completed: "bg-green-500",
   stopped: "bg-zinc-500",
   failed: "bg-red-500",
+  waiting_for_user: "bg-amber-500",
 };
 
 export function SessionList({

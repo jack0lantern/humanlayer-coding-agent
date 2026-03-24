@@ -43,6 +43,23 @@ export default function App() {
     },
   });
 
+  // Send follow-up message mutation
+  const sendMessage = useMutation({
+    mutationFn: ({ id, message }: { id: string; message: string }) =>
+      api.sessions.sendMessage(id, message),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["sessions"] });
+    },
+  });
+
+  // End session mutation
+  const endSession = useMutation({
+    mutationFn: (id: string) => api.sessions.end(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["sessions"] });
+    },
+  });
+
   // Stream events for selected session
   const { events, sessionStatus } = useSessionStream(selectedSessionId);
 
@@ -106,6 +123,10 @@ export default function App() {
               events={events}
               sessionStatus={currentStatus}
               onStop={() => stopSession.mutate(selectedSessionId)}
+              onSendMessage={(message) =>
+                sendMessage.mutate({ id: selectedSessionId!, message })
+              }
+              onEndSession={() => endSession.mutate(selectedSessionId!)}
             />
           </>
         ) : (

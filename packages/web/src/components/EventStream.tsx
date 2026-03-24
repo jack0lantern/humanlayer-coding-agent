@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import type { EventDTO } from "@codingagent/shared";
 import Markdown from "react-markdown";
 
@@ -6,12 +6,16 @@ interface EventStreamProps {
   events: EventDTO[];
   sessionStatus: string | null;
   onStop: () => void;
+  onSendMessage: (message: string) => void;
+  onEndSession: () => void;
 }
 
 export function EventStream({
   events,
   sessionStatus,
   onStop,
+  onSendMessage,
+  onEndSession,
 }: EventStreamProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -71,6 +75,67 @@ export function EventStream({
           </div>
         )}
       </div>
+
+      {sessionStatus === "waiting_for_user" && (
+        <FollowUpInput onSend={onSendMessage} onEnd={onEndSession} />
+      )}
+    </div>
+  );
+}
+
+function FollowUpInput({
+  onSend,
+  onEnd,
+}: {
+  onSend: (message: string) => void;
+  onEnd: () => void;
+}) {
+  const [message, setMessage] = useState("");
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (message.trim()) {
+      onSend(message.trim());
+      setMessage("");
+    }
+  };
+
+  return (
+    <div className="border-t border-zinc-800 p-4">
+      <div className="flex items-center gap-2 mb-2">
+        <span className="w-2 h-2 rounded-full bg-amber-500" />
+        <span className="text-xs text-zinc-400">Waiting for your input</span>
+      </div>
+      <form onSubmit={handleSubmit} className="flex gap-2">
+        <textarea
+          value={message}
+          onChange={(e) => setMessage(e.target.value)}
+          placeholder="Send a follow-up message..."
+          className="flex-1 bg-zinc-800 text-zinc-100 rounded-lg p-3 text-sm resize-none border border-zinc-700 focus:border-zinc-500 focus:outline-none placeholder-zinc-500"
+          rows={2}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+              handleSubmit(e);
+            }
+          }}
+        />
+        <div className="flex flex-col gap-2">
+          <button
+            type="submit"
+            disabled={!message.trim()}
+            className="bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-700 disabled:text-zinc-500 text-white text-sm font-medium py-2 px-4 rounded-lg transition-colors"
+          >
+            Send
+          </button>
+          <button
+            type="button"
+            onClick={onEnd}
+            className="bg-zinc-700 hover:bg-zinc-600 text-zinc-300 text-sm font-medium py-2 px-4 rounded-lg transition-colors"
+          >
+            End
+          </button>
+        </div>
+      </form>
     </div>
   );
 }
@@ -127,6 +192,16 @@ function EventBlock({ event }: { event: EventDTO }) {
           <pre className="p-3 text-xs text-zinc-300 overflow-x-auto max-h-64 overflow-y-auto whitespace-pre-wrap">
             {data.output}
           </pre>
+        </div>
+      );
+
+    case "user_message":
+      return (
+        <div className="bg-blue-950/20 border border-blue-800/30 rounded-lg p-3">
+          <span className="text-xs text-blue-400 font-medium">You</span>
+          <div className="prose prose-invert prose-sm max-w-none mt-1">
+            <Markdown>{data.content}</Markdown>
+          </div>
         </div>
       );
 

@@ -10,6 +10,7 @@ import {
 } from "../state.js";
 import type {
   CreateSessionRequest,
+  SendMessageRequest,
   SessionDTO,
   EventDTO,
 } from "@codingagent/shared";
@@ -140,7 +141,7 @@ sessions.get("/:id/events", async (c) => {
 
   const events = await prisma.event.findMany({
     where: { sessionId: session.id },
-    orderBy: { sequence: "asc" },
+    orderBy: [{ sequence: "asc" }, { createdAt: "asc" }],
   });
 
   return c.json({ events: events.map(toEventDTO) });
@@ -168,7 +169,7 @@ sessions.get("/:id/stream", async (c) => {
         sessionId,
         ...(afterSequence > 0 ? { sequence: { gt: afterSequence } } : {}),
       },
-      orderBy: { sequence: "asc" },
+      orderBy: [{ sequence: "asc" }, { createdAt: "asc" }],
       take: BACKFILL_LIMIT,
     });
 
@@ -229,6 +230,101 @@ sessions.get("/:id/stream", async (c) => {
       stream.onAbort(resolve);
     });
   });
+});
+
+// POST /api/sessions/:id/message - Send a follow-up message to a waiting session
+sessions.post("/:id/message", async (c) => {
+  const body = await c.req.json<SendMessageRequest>();
+  const session = await prisma.session.findUnique({
+    where: { id: c.req.param("id") },
+  });
+
+  if (!session) return c.json({ error: "Session not found" }, 404);
+  if (session.status !== "waiting_for_user") {
+    return c.json({ error: "Session is not waiting for user input" }, 400);
+  }
+  if (!body.message || body.message.trim() === "") {
+    return c.json({ error: "message is required" }, 400);
+  }
+
+  // Persist the user message as an event
+  const lastEvent = await prisma.event.findFirst({
+    where: { sessionId: session.id },
+    orderBy: { sequence: "desc" },
+  });
+  const sequence = (lastEvent?.sequence ?? -1) + 1;
+
+  const userMsgEvent = await prisma.event.create({
+    data: {
+      sessionId: session.id,
+      type: "user_message",
+      data: { type: "user_message", content: body.message.trim() },
+      sequence,
+    },
+  });
+
+  // Broadcast the user_message event via SSE
+  broadcastSSE(session.id, "event", {
+    event: toEventDTO(userMsgEvent),
+  });
+
+  // Update session to running
+  const updated = await prisma.session.update({
+    where: { id: session.id },
+    data: { status: "running" },
+  });
+
+  // Load all events for history reconstruction, excluding the follow-up
+  // user_message we just added (it's passed separately as followUpMessage).
+  const allEvents = await prisma.event.findMany({
+    where: { sessionId: session.id, NOT: { id: userMsgEvent.id } },
+    orderBy: [{ sequence: "asc" }, { createdAt: "asc" }],
+  });
+
+  // Send continue message to agent with event history
+  const agent = getConnectedAgent();
+  if (agent) {
+    sendToAgent({
+      type: "server:session:continue",
+      sessionId: session.id,
+      followUpMessage: body.message.trim(),
+      sessionPrompt: session.prompt,
+      history: allEvents.map((e) => ({
+        type: e.type,
+        data: e.data as Record<string, unknown>,
+      })),
+    });
+  }
+
+  broadcastSSE(session.id, "session_update", {
+    sessionId: session.id,
+    status: "running",
+  });
+
+  return c.json({ session: toSessionDTO(updated) });
+});
+
+// POST /api/sessions/:id/end - Explicitly end a waiting session
+sessions.post("/:id/end", async (c) => {
+  const session = await prisma.session.findUnique({
+    where: { id: c.req.param("id") },
+  });
+  if (!session) return c.json({ error: "Session not found" }, 404);
+  if (session.status !== "waiting_for_user") {
+    return c.json({ error: "Session is not waiting for user input" }, 400);
+  }
+
+  const updated = await prisma.session.update({
+    where: { id: session.id },
+    data: { status: "completed", finishedAt: new Date() },
+  });
+
+  broadcastSSE(session.id, "session_update", {
+    sessionId: session.id,
+    status: "completed",
+  });
+
+  return c.json({ session: toSessionDTO(updated) });
 });
 
 export default sessions;

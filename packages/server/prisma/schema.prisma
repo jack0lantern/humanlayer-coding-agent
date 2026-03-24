@@ -18,6 +18,7 @@ enum SessionStatus {
   completed
   stopped
   failed
+  waiting_for_user
 }
 
 enum EventType {
@@ -27,6 +28,7 @@ enum EventType {
   tool_result
   error
   session_complete
+  user_message
 }
 
 model Agent {

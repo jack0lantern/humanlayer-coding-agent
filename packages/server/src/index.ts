@@ -10,7 +10,7 @@ import { createNodeWebSocket } from "@hono/node-ws";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
-import { ensureConnection } from "./db.js";
+import { ensureConnection, prisma } from "./db.js";
 import sessionsRoute from "./routes/sessions.js";
 import agentsRoute from "./routes/agents.js";
 import { handleAgentConnection } from "./ws/agent-handler.js";
@@ -84,6 +84,17 @@ async function start() {
           ? `Server running on port ${boundPort} (${basePort} was occupied)`
           : `Server running on port ${boundPort}`
       );
+
+      // Graceful shutdown
+      const shutdown = async () => {
+        console.log("\nShutting down...");
+        server.close();
+        await prisma.$disconnect();
+        process.exit(0);
+      };
+      process.on("SIGINT", shutdown);
+      process.on("SIGTERM", shutdown);
+
       return;
     } catch (err) {
       const nodeErr = err as NodeJS.ErrnoException;

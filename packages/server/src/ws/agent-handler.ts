@@ -7,6 +7,16 @@ import {
 } from "../state.js";
 import type { AgentMessage, EventType } from "@codingagent/shared";
 
+// Per-session event queue to serialise inserts and prevent sequence races.
+const sessionEventQueues = new Map<string, Promise<void>>();
+
+function enqueueSessionEvent(sessionId: string, fn: () => Promise<void>): Promise<void> {
+  const prev = sessionEventQueues.get(sessionId) ?? Promise.resolve();
+  const next = prev.then(fn, fn); // always run fn even if prev rejected
+  sessionEventQueues.set(sessionId, next);
+  return next;
+}
+
 export function handleAgentConnection(ws: WebSocket) {
   console.log("Agent WebSocket connected");
 
@@ -110,51 +120,61 @@ export function handleAgentConnection(ws: WebSocket) {
         case "agent:event": {
           const { sessionId, event } = message;
 
-          // Get next sequence number
-          const lastEvent = await prisma.event.findFirst({
-            where: { sessionId },
-            orderBy: { sequence: "desc" },
-          });
-          const sequence = (lastEvent?.sequence ?? -1) + 1;
+          // Serialise event inserts per session to prevent sequence races.
+          // Without this, concurrent async handlers read the same MAX(sequence)
+          // and produce duplicates, corrupting event order on reconstruction.
+          await enqueueSessionEvent(sessionId, async () => {
+            const lastEvent = await prisma.event.findFirst({
+              where: { sessionId },
+              orderBy: { sequence: "desc" },
+            });
+            const sequence = (lastEvent?.sequence ?? -1) + 1;
 
-          // Persist event
-          const dbEvent = await prisma.event.create({
-            data: {
-              sessionId,
-              type: event.type as EventType,
-              data: event as any,
-              sequence,
-            },
-          });
-
-          // Broadcast to SSE subscribers
-          broadcastSSE(sessionId, "event", {
-            event: {
-              id: dbEvent.id,
-              sessionId: dbEvent.sessionId,
-              type: dbEvent.type,
-              data: dbEvent.data,
-              sequence: dbEvent.sequence,
-              createdAt: dbEvent.createdAt.toISOString(),
-            },
-          });
-
-          // If session complete, update session status
-          if (event.type === "session_complete") {
-            const finalStatus = event.status;
-            await prisma.session.update({
-              where: { id: sessionId },
+            const dbEvent = await prisma.event.create({
               data: {
-                status: finalStatus,
-                finishedAt: new Date(),
+                sessionId,
+                type: event.type as EventType,
+                data: event as any,
+                sequence,
               },
             });
 
-            broadcastSSE(sessionId, "session_update", {
-              sessionId,
-              status: finalStatus,
+            // Broadcast to SSE subscribers
+            broadcastSSE(sessionId, "event", {
+              event: {
+                id: dbEvent.id,
+                sessionId: dbEvent.sessionId,
+                type: dbEvent.type,
+                data: dbEvent.data,
+                sequence: dbEvent.sequence,
+                createdAt: dbEvent.createdAt.toISOString(),
+              },
             });
-          }
+
+            // If session complete, update session status
+            if (event.type === "session_complete") {
+              const finalStatus = event.status;
+              if (finalStatus === "waiting_for_user") {
+                await prisma.session.update({
+                  where: { id: sessionId },
+                  data: { status: "waiting_for_user" },
+                });
+              } else {
+                await prisma.session.update({
+                  where: { id: sessionId },
+                  data: {
+                    status: finalStatus,
+                    finishedAt: new Date(),
+                  },
+                });
+              }
+
+              broadcastSSE(sessionId, "session_update", {
+                sessionId,
+                status: finalStatus,
+              });
+            }
+          });
 
           break;
         }

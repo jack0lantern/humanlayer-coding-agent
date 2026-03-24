@@ -20,6 +20,8 @@ interface AgentLoopOptions {
   shouldStop: () => boolean;
   /** Override max iterations (default: MAX_ITERATIONS from context-window). */
   maxIterations?: number;
+  /** Pre-built message history for multi-turn continuation. */
+  previousMessages?: Anthropic.MessageParam[];
 }
 
 const SYSTEM_PROMPT = `You are a coding agent running inside a workspace directory. You can read files, write files, execute shell commands, and list directories.
@@ -117,6 +119,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<void> {
     onEvent,
     shouldStop,
     maxIterations = MAX_ITERATIONS,
+    previousMessages,
   } = options;
 
   // --- Validate prompt size ---
@@ -133,9 +136,9 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<void> {
 
   const client = new Anthropic({ apiKey });
 
-  const messages: Anthropic.MessageParam[] = [
-    { role: "user", content: prompt },
-  ];
+  const messages: Anthropic.MessageParam[] = previousMessages
+    ? [...previousMessages, { role: "user", content: prompt }]
+    : [{ role: "user", content: prompt }];
 
   let iteration = 0;
 
@@ -197,8 +200,12 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<void> {
 
         // Execute all tools
         const toolResults: Anthropic.ToolResultBlockParam[] = [];
+        let stoppedEarly = false;
         for (const block of toolUseBlocks) {
-          if (shouldStop()) break;
+          if (shouldStop()) {
+            stoppedEarly = true;
+            break;
+          }
 
           const result = await executeTool(
             block.name,
@@ -224,6 +231,9 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<void> {
           });
         }
 
+        // If stopped mid-execution, don't push incomplete state — just exit.
+        if (stoppedEarly) break;
+
         // Add assistant response + tool results to conversation
         messages.push({ role: "assistant", content: response.content });
         messages.push({ role: "user", content: toolResults });
@@ -232,13 +242,13 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<void> {
         continue;
       }
 
-      // end_turn or other stop reason — we're done
+      // end_turn or other stop reason — turn complete, wait for user follow-up
       messages.push({ role: "assistant", content: response.content });
 
       onEvent({
         type: "session_complete",
-        status: "completed",
-        summary: "Agent completed the task",
+        status: "waiting_for_user",
+        summary: "Agent completed turn, waiting for follow-up",
       });
       return;
     } catch (error) {

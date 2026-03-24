@@ -149,7 +149,7 @@ describe("runAgentLoop - edge cases", () => {
 
     const complete = events.find((e) => e.type === "session_complete");
     expect(complete).toBeDefined();
-    expect((complete as any).status).toBe("completed");
+    expect((complete as any).status).toBe("waiting_for_user");
     expect(events.some((e) => e.type === "text")).toBe(true);
   });
 
@@ -200,7 +200,7 @@ describe("runAgentLoop - edge cases", () => {
 
     const complete = events.find((e) => e.type === "session_complete");
     expect(complete).toBeDefined();
-    expect((complete as any).status).toBe("completed");
+    expect((complete as any).status).toBe("waiting_for_user");
     // Should have been called 3 times (2 retries + 1 success)
     expect(callCount).toBe(3);
   }, 30_000);
@@ -225,7 +225,7 @@ describe("runAgentLoop - edge cases", () => {
     expect(events.some((e) => e.type === "tool_call")).toBe(true);
     expect(events.some((e) => e.type === "tool_result")).toBe(true);
     expect(
-      events.find((e) => e.type === "session_complete" && (e as any).status === "completed")
+      events.find((e) => e.type === "session_complete" && (e as any).status === "waiting_for_user")
     ).toBeDefined();
   });
 });

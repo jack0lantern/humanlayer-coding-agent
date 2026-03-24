@@ -11,7 +11,8 @@ export type SessionStatus =
   | "running"
   | "completed"
   | "stopped"
-  | "failed";
+  | "failed"
+  | "waiting_for_user";
 
 export type EventType =
   | "thinking"
@@ -19,7 +20,8 @@ export type EventType =
   | "tool_call"
   | "tool_result"
   | "error"
-  | "session_complete";
+  | "session_complete"
+  | "user_message";
 
 // --- Agent -> Server Messages ---
 
@@ -67,6 +69,15 @@ export interface ServerSessionStopMessage {
   sessionId: string;
 }
 
+export interface ServerSessionContinueMessage {
+  type: "server:session:continue";
+  sessionId: string;
+  followUpMessage: string;
+  /** The original session prompt, needed to reconstruct valid message history. */
+  sessionPrompt: string;
+  history: Array<{ type: string; data: Record<string, unknown> }>;
+}
+
 export interface ServerPongMessage {
   type: "server:pong";
   timestamp: string;
@@ -75,6 +86,7 @@ export interface ServerPongMessage {
 export type ServerMessage =
   | ServerSessionAssignMessage
   | ServerSessionStopMessage
+  | ServerSessionContinueMessage
   | ServerPongMessage;
 
 // --- Session Events (streamed from agent) ---
@@ -110,8 +122,13 @@ export interface ErrorEvent {
 
 export interface SessionCompleteEvent {
   type: "session_complete";
-  status: "completed" | "stopped" | "failed";
+  status: "completed" | "stopped" | "failed" | "waiting_for_user";
   summary?: string;
+}
+
+export interface UserMessageEvent {
+  type: "user_message";
+  content: string;
 }
 
 export type SessionEvent =
@@ -120,4 +137,5 @@ export type SessionEvent =
   | ToolCallEvent
   | ToolResultEvent
   | ErrorEvent
-  | SessionCompleteEvent;
+  | SessionCompleteEvent
+  | UserMessageEvent;

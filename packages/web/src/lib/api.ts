@@ -3,6 +3,8 @@ import type {
   ListSessionsResponse,
   GetSessionResponse,
   StopSessionResponse,
+  SendMessageResponse,
+  EndSessionResponse,
   ListAgentsResponse,
   GetSessionEventsResponse,
 } from "@codingagent/shared";
@@ -36,6 +38,15 @@ export const api = {
       }),
     events: (id: string) =>
       request<GetSessionEventsResponse>(`/sessions/${id}/events`),
+    sendMessage: (id: string, message: string) =>
+      request<SendMessageResponse>(`/sessions/${id}/message`, {
+        method: "POST",
+        body: JSON.stringify({ message }),
+      }),
+    end: (id: string) =>
+      request<EndSessionResponse>(`/sessions/${id}/end`, {
+        method: "POST",
+      }),
   },
   agents: {
     list: () => request<ListAgentsResponse>("/agents"),
