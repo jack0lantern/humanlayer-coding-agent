@@ -24,9 +24,24 @@ services:
     environment:
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/coding_agent
       SERVER_PORT: "3000"
+      WORKSPACE_DIR: /workspace
+    volumes:
+      - workspace:/workspace
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 60s
     restart: unless-stopped
 
   web:
@@ -36,7 +51,8 @@ services:
     ports:
       - "${WEB_PORT:-5173}:80"
     depends_on:
-      - server
+      server:
+        condition: service_healthy
     restart: unless-stopped
 
   agent:
@@ -46,10 +62,16 @@ services:
     environment:
       AGENT_SERVER_URL: http://server:3000
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      # SOURCE_REPOS_DIR: /repos  # Enable local path copies from mounted repos
+    volumes:
+      - workspace:/workspace
+      # - /path/to/local/repos:/repos:ro  # Mount local repos read-only for copy-on-write
     depends_on:
-      - server
+      server:
+        condition: service_healthy
     # No ports exposed - agent connects outbound only
     restart: unless-stopped
 
 volumes:
   pgdata:
+  workspace:

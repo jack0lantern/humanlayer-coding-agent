@@ -28,7 +28,8 @@ export default function App() {
 
   // Create session mutation
   const createSession = useMutation({
-    mutationFn: (prompt: string) => api.sessions.create(prompt),
+    mutationFn: ({ prompt, repoUrl }: { prompt: string; repoUrl?: string }) =>
+      api.sessions.create(prompt, repoUrl),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["sessions"] });
       setSelectedSessionId(data.session.id);
@@ -57,6 +58,14 @@ export default function App() {
     mutationFn: (id: string) => api.sessions.end(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["sessions"] });
+    },
+  });
+
+  // Download session workspace
+  const downloadSession = useMutation({
+    mutationFn: (id: string) => api.sessions.download(id),
+    onError: (error: Error) => {
+      alert(`Download failed: ${error.message}`);
     },
   });
 
@@ -99,13 +108,13 @@ export default function App() {
 
         {/* Create session */}
         <CreateSession
-          onSubmit={(prompt) => createSession.mutate(prompt)}
+          onSubmit={(prompt, repoUrl) => createSession.mutate({ prompt, repoUrl })}
           isDisabled={!hasOnlineAgent || createSession.isPending}
         />
       </div>
 
       {/* Main content */}
-      <div className="flex-1 flex flex-col min-h-0">
+      <div className="min-w-0 flex-1 flex flex-col min-h-0">
         {selectedSessionId ? (
           <>
             {/* Session header */}
@@ -128,6 +137,7 @@ export default function App() {
                 sendMessage.mutate({ id: selectedSessionId!, message })
               }
               onEndSession={() => endSession.mutate(selectedSessionId!)}
+              onDownload={() => downloadSession.mutate(selectedSessionId!)}
             />
           </>
         ) : (

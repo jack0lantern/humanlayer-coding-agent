@@ -1,3 +1,6 @@
+import { existsSync, readdirSync } from "fs";
+import { join } from "path";
+import archiver from "archiver";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { prisma } from "../db.js";
@@ -22,6 +25,7 @@ function toSessionDTO(session: any): SessionDTO {
     id: session.id,
     agentId: session.agentId,
     prompt: session.prompt,
+    repoUrl: session.repoUrl ?? null,
     status: session.status,
     createdAt: session.createdAt.toISOString(),
     startedAt: session.startedAt?.toISOString() ?? null,
@@ -61,8 +65,20 @@ sessions.post("/", async (c) => {
     );
   }
 
+  // Validate repoUrl if provided (git URL or absolute local path)
+  const repoUrl = body.repoUrl?.trim() || undefined;
+  if (repoUrl && !/^(https:\/\/|git@|\/)/.test(repoUrl)) {
+    return c.json(
+      { error: "repoUrl must be a git URL (https:// or git@) or an absolute path" },
+      400
+    );
+  }
+
   const session = await prisma.session.create({
-    data: { prompt: body.prompt.trim() },
+    data: {
+      prompt: body.prompt.trim(),
+      ...(repoUrl && { repoUrl }),
+    },
   });
 
   const dto = toSessionDTO(session);
@@ -82,6 +98,7 @@ sessions.post("/", async (c) => {
       type: "server:session:assign",
       sessionId: session.id,
       prompt: body.prompt.trim(),
+      ...(repoUrl && { repoUrl }),
     });
   }
 
@@ -295,6 +312,7 @@ sessions.post("/:id/message", async (c) => {
         type: e.type,
         data: e.data as Record<string, unknown>,
       })),
+      ...(session.repoUrl && { repoUrl: session.repoUrl }),
     });
   }
 
@@ -329,5 +347,73 @@ sessions.post("/:id/end", async (c) => {
 
   return c.json({ session: toSessionDTO(updated) });
 });
+
+// GET /api/sessions/:id/download - Download session workspace as zip
+sessions.get("/:id/download", async (c) => {
+  const sessionId = c.req.param("id");
+
+  // Validate UUID format to prevent path traversal
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!uuidRegex.test(sessionId)) {
+    return c.json({ error: "Invalid session ID" }, 400);
+  }
+
+  const session = await prisma.session.findUnique({
+    where: { id: sessionId },
+  });
+  if (!session) return c.json({ error: "Session not found" }, 404);
+
+  // Block download while agent is actively running
+  if (session.status === "running" || session.status === "pending") {
+    return c.json({ error: "Session is still running. Wait for it to finish before downloading." }, 400);
+  }
+
+  // Resolve workspace directory: WORKSPACE_DIR env or fall back to agent's registered workingDir
+  const workspaceBase = process.env.WORKSPACE_DIR;
+  if (!workspaceBase) {
+    // Fall back to agent's workingDir from DB
+    const agent = session.agentId
+      ? await prisma.agent.findUnique({ where: { id: session.agentId } })
+      : null;
+    const fallbackDir = agent?.workingDir;
+    if (!fallbackDir) {
+      return c.json({ error: "Workspace directory not configured" }, 500);
+    }
+    // Use fallback with session subdirectory
+    const sessionDir = join(fallbackDir, sessionId);
+    if (!existsSync(sessionDir) || readdirSync(sessionDir).length === 0) {
+      return c.json({ error: "No files found for this session" }, 404);
+    }
+    return streamZip(c, sessionDir, sessionId);
+  }
+
+  const sessionDir = join(workspaceBase, sessionId);
+  if (!existsSync(sessionDir) || readdirSync(sessionDir).length === 0) {
+    return c.json({ error: "No files found for this session" }, 404);
+  }
+
+  return streamZip(c, sessionDir, sessionId);
+});
+
+function streamZip(c: any, directory: string, sessionId: string) {
+  const archive = archiver("zip", { zlib: { level: 6 } });
+
+  const { readable, writable } = new TransformStream();
+  const writer = writable.getWriter();
+
+  archive.on("data", (chunk: Buffer) => writer.write(chunk).catch(() => {}));
+  archive.on("end", () => writer.close().catch(() => {}));
+  archive.on("error", () => writer.close().catch(() => {}));
+
+  archive.directory(directory, false);
+  archive.finalize();
+
+  return new Response(readable, {
+    headers: {
+      "Content-Type": "application/zip",
+      "Content-Disposition": `attachment; filename="session-${sessionId.slice(0, 8)}.zip"`,
+    },
+  });
+}
 
 export default sessions;

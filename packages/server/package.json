@@ -12,6 +12,7 @@
     "db:migrate": "prisma migrate deploy"
   },
   "dependencies": {
+    "archiver": "^7.0.1",
     "dotenv": "^16.4.5",
     "@codingagent/shared": "*",
     "@hono/node-server": "^1.13.8",
@@ -22,6 +23,7 @@
     "zod": "^3.24.2"
   },
   "devDependencies": {
+    "@types/archiver": "^6.0.3",
     "@types/node": "^22.13.10",
     "@types/ws": "^8.5.14",
     "prisma": "^6.4.1",

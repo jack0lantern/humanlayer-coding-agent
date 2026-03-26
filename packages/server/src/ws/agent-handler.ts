@@ -80,6 +80,7 @@ export function handleAgentConnection(ws: WebSocket) {
                 type: "server:session:assign",
                 sessionId: pendingSession.id,
                 prompt: pendingSession.prompt,
+                ...(pendingSession.repoUrl && { repoUrl: pendingSession.repoUrl }),
               })
             );
 

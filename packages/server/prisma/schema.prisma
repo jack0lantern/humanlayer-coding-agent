@@ -29,6 +29,7 @@ enum EventType {
   error
   session_complete
   user_message
+  loop_step
 }
 
 model Agent {
@@ -50,6 +51,7 @@ model Session {
   agentId    String?       @map("agent_id")
   agent      Agent?        @relation(fields: [agentId], references: [id])
   prompt     String
+  repoUrl    String?       @map("repo_url")
   status     SessionStatus @default(pending)
   createdAt  DateTime      @default(now()) @map("created_at")
   startedAt  DateTime?     @map("started_at")

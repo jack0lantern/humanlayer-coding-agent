@@ -1,12 +1,18 @@
 import WebSocket from "ws";
 import Anthropic from "@anthropic-ai/sdk";
 import { randomUUID } from "crypto";
+import { execFile } from "child_process";
+import { existsSync, mkdirSync } from "fs";
+import { join, resolve, relative } from "path";
+import { promisify } from "util";
 import { runAgentLoop } from "./agent-loop.js";
 import type {
   AgentMessage,
   ServerMessage,
   SessionEvent,
 } from "@codingagent/shared";
+
+const execFileAsync = promisify(execFile);
 
 /** Maximum WebSocket message size (1 MB). Larger payloads are truncated. */
 const MAX_WS_MESSAGE_SIZE = 1024 * 1024;
@@ -42,6 +48,98 @@ function truncateEventForWS(event: SessionEvent): SessionEvent {
   }
 
   return event;
+}
+
+/**
+ * Allowed base directory for local path copies.
+ * When set, repoUrl values starting with "/" are treated as local paths
+ * and must resolve within this directory. If unset, local paths are rejected.
+ */
+const SOURCE_REPOS_DIR = process.env.SOURCE_REPOS_DIR || "";
+
+/**
+ * Initialize a session workspace by cloning a git repo or copying a local directory.
+ *
+ * - Git URLs (https://, git@): shallow-cloned via `git clone --depth 1`
+ * - Local paths (/...): copied via `cp -a`, must be within SOURCE_REPOS_DIR
+ *
+ * Uses execFile (array args) to avoid shell injection.
+ */
+async function initializeWorkspace(
+  sessionDir: string,
+  repoUrl?: string
+): Promise<{ ok: boolean; error?: string }> {
+  if (!repoUrl) return { ok: true };
+
+  // Local path
+  if (repoUrl.startsWith("/")) {
+    return copyLocalRepo(sessionDir, repoUrl);
+  }
+
+  // Git URL
+  if (/^(https:\/\/|git@)/.test(repoUrl)) {
+    return cloneGitRepo(sessionDir, repoUrl);
+  }
+
+  return { ok: false, error: `Invalid repoUrl: ${repoUrl}` };
+}
+
+async function cloneGitRepo(
+  sessionDir: string,
+  repoUrl: string
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    await execFileAsync(
+      "git",
+      ["clone", "--depth", "1", repoUrl, "."],
+      { cwd: sessionDir, timeout: 120_000 }
+    );
+    return { ok: true };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { ok: false, error: `Git clone failed: ${message}` };
+  }
+}
+
+async function copyLocalRepo(
+  sessionDir: string,
+  localPath: string
+): Promise<{ ok: boolean; error?: string }> {
+  if (!SOURCE_REPOS_DIR) {
+    return {
+      ok: false,
+      error: "Local paths are not enabled. Set SOURCE_REPOS_DIR on the agent.",
+    };
+  }
+
+  // Resolve and verify the path is within the allowed directory
+  const resolvedSource = resolve(localPath);
+  const resolvedBase = resolve(SOURCE_REPOS_DIR);
+  const rel = relative(resolvedBase, resolvedSource);
+  if (rel.startsWith("..") || resolve(resolvedBase, rel) !== resolvedSource) {
+    return {
+      ok: false,
+      error: `Path "${localPath}" is outside the allowed source directory.`,
+    };
+  }
+
+  if (!existsSync(resolvedSource)) {
+    return { ok: false, error: `Source path not found: ${localPath}` };
+  }
+
+  try {
+    // cp -a preserves symlinks, permissions, timestamps
+    // Trailing /. copies contents (not the directory itself) into sessionDir
+    await execFileAsync(
+      "cp",
+      ["-a", resolvedSource + "/.", sessionDir],
+      { timeout: 120_000 }
+    );
+    return { ok: true };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { ok: false, error: `Copy failed: ${message}` };
+  }
 }
 
 /**
@@ -116,6 +214,7 @@ function reconstructMessages(
       case "session_complete":
       case "error":
       case "thinking":
+      case "loop_step":
         // Flush assistant blocks on turn boundaries
         if (event.type === "session_complete" || event.type === "error") {
           flushAssistant();
@@ -208,10 +307,60 @@ export function startWSClient(options: WSClientOptions) {
               agentId,
             });
 
+            // Per-session workspace isolation
+            const sessionDir = join(workingDir, message.sessionId);
+            mkdirSync(sessionDir, { recursive: true });
+
+            // Initialize workspace (clone repo or copy local directory)
+            if (message.repoUrl) {
+              const isLocal = message.repoUrl.startsWith("/");
+              send({
+                type: "agent:event",
+                sessionId: message.sessionId,
+                event: {
+                  type: "text",
+                  content: isLocal
+                    ? `Copying workspace from ${message.repoUrl}...`
+                    : `Cloning repository ${message.repoUrl}...`,
+                },
+              });
+
+              const initResult = await initializeWorkspace(sessionDir, message.repoUrl);
+              if (!initResult.ok) {
+                send({
+                  type: "agent:event",
+                  sessionId: message.sessionId,
+                  event: { type: "error", message: initResult.error! },
+                });
+                send({
+                  type: "agent:event",
+                  sessionId: message.sessionId,
+                  event: {
+                    type: "session_complete",
+                    status: "failed",
+                    summary: initResult.error!,
+                  },
+                });
+                console.log(`Session ${message.sessionId} failed: ${initResult.error}`);
+                break;
+              }
+
+              send({
+                type: "agent:event",
+                sessionId: message.sessionId,
+                event: {
+                  type: "text",
+                  content: isLocal
+                    ? "Workspace copied successfully."
+                    : "Repository cloned successfully.",
+                },
+              });
+            }
+
             // Run agent loop
             await runAgentLoop({
               prompt: message.prompt,
-              workingDir,
+              workingDir: sessionDir,
               apiKey,
               onEvent: (event: SessionEvent) => {
                 send({
@@ -238,6 +387,10 @@ export function startWSClient(options: WSClientOptions) {
               agentId,
             });
 
+            // Per-session workspace isolation
+            const continueDir = join(workingDir, message.sessionId);
+            mkdirSync(continueDir, { recursive: true });
+
             // Reconstruct message history from events
             const previousMessages = reconstructMessages(
               message.history,
@@ -247,7 +400,7 @@ export function startWSClient(options: WSClientOptions) {
             // Run agent loop with history
             await runAgentLoop({
               prompt: message.followUpMessage,
-              workingDir,
+              workingDir: continueDir,
               apiKey,
               onEvent: (event: SessionEvent) => {
                 send({

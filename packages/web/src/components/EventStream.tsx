@@ -46,6 +46,18 @@ interface EventStreamProps {
   onStop: () => void;
   onSendMessage: (message: string) => void;
   onEndSession: () => void;
+  onDownload: () => void;
+}
+
+/** Latest `loop_step` message from the agent loop, if any (search newest first). */
+function getLatestLoopStepMessage(events: EventDTO[]): string | undefined {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const ev = events[i];
+    if (ev.type !== "loop_step") continue;
+    const msg = ev.data?.message;
+    if (typeof msg === "string" && msg.length > 0) return msg;
+  }
+  return undefined;
 }
 
 export function EventStream({
@@ -55,15 +67,17 @@ export function EventStream({
   onStop,
   onSendMessage,
   onEndSession,
+  onDownload,
 }: EventStreamProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [confirmAction, setConfirmAction] = useState<"stop" | "end" | null>(null);
+  const loopStepMessage = getLatestLoopStepMessage(events);
 
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [events]);
+  }, [events, sessionStatus]);
 
   const handleConfirmedStop = useCallback(() => {
     setConfirmAction(null);
@@ -76,19 +90,35 @@ export function EventStream({
   }, [onEndSession]);
 
   if (events.length === 0) {
+    const showLoading =
+      sessionStatus === "pending" || sessionStatus === "running";
     return (
-      <div className="flex-1 flex items-center justify-center text-zinc-500">
-        {sessionStatus === "pending"
-          ? "Waiting for agent..."
-          : sessionStatus === "running"
-            ? "Agent is starting..."
-            : "Select a session to view events"}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <div className="flex-1 flex flex-col items-center justify-center gap-3 p-6 text-zinc-500">
+          {showLoading ? (
+            <>
+              <div className="flex items-center gap-2 text-zinc-400">
+                <span className="relative flex h-2 w-2">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-400 opacity-40" />
+                  <span className="relative inline-flex h-2 w-2 rounded-full bg-blue-500" />
+                </span>
+                <span className="text-sm text-center max-w-md">
+                  {sessionStatus === "pending"
+                    ? "Waiting for an agent to pick up this session…"
+                    : loopStepMessage ?? "Agent is starting…"}
+                </span>
+              </div>
+            </>
+          ) : (
+            <p>Select a session to view events</p>
+          )}
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="flex-1 flex flex-col min-h-0">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       {confirmAction === "stop" && (
         <ConfirmDialog
           title="Stop Agent"
@@ -109,10 +139,17 @@ export function EventStream({
       )}
 
       {sessionStatus === "running" && (
-        <div className="flex items-center justify-between px-4 py-2 bg-zinc-900 border-b border-zinc-800">
-          <div className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
-            <span className="text-xs text-zinc-400">Running</span>
+        <div className="flex items-center justify-between px-4 py-2 bg-zinc-900 border-b border-zinc-800 gap-3">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="w-2 h-2 shrink-0 rounded-full bg-blue-500 animate-pulse" />
+            <div className="min-w-0 flex flex-col gap-0.5">
+              <span className="text-xs text-zinc-400">Running</span>
+              {loopStepMessage ? (
+                <span className="text-xs text-zinc-500 truncate" title={loopStepMessage}>
+                  {loopStepMessage}
+                </span>
+              ) : null}
+            </div>
           </div>
           <button
             onClick={() => setConfirmAction("stop")}
@@ -124,13 +161,27 @@ export function EventStream({
         </div>
       )}
 
-      <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-3">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-3">
         {events.map((event) => (
           <EventBlock key={event.id} event={event} />
         ))}
 
+        {sessionStatus === "running" && (
+          <div
+            className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/80 px-3 py-2.5 text-sm text-zinc-400"
+            aria-live="polite"
+            aria-busy="true"
+          >
+            <span className="relative flex h-2 w-2 shrink-0">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-400 opacity-40" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-blue-500" />
+            </span>
+            <span className="min-w-0">{loopStepMessage ?? "Agent is working…"}</span>
+          </div>
+        )}
+
         {sessionStatus && ["completed", "stopped", "failed"].includes(sessionStatus) && (
-          <div className="text-center py-4">
+          <div className="text-center py-4 flex items-center justify-center gap-3">
             <span
               className={`text-xs px-3 py-1 rounded-full ${
                 sessionStatus === "completed"
@@ -143,12 +194,19 @@ export function EventStream({
               Session {sessionStatus}
               {stoppedBy && ` by ${stoppedBy}`}
             </span>
+            <button
+              onClick={onDownload}
+              className="text-xs px-3 py-1 rounded-full bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 transition-colors"
+              title="Download project files as zip"
+            >
+              Download Project
+            </button>
           </div>
         )}
       </div>
 
       {sessionStatus === "waiting_for_user" && (
-        <FollowUpInput onSend={onSendMessage} onEnd={() => setConfirmAction("end")} />
+        <FollowUpInput onSend={onSendMessage} onEnd={() => setConfirmAction("end")} onDownload={onDownload} />
       )}
     </div>
   );
@@ -157,9 +215,11 @@ export function EventStream({
 function FollowUpInput({
   onSend,
   onEnd,
+  onDownload,
 }: {
   onSend: (message: string) => void;
   onEnd: () => void;
+  onDownload: () => void;
 }) {
   const [message, setMessage] = useState("");
 
@@ -172,17 +232,17 @@ function FollowUpInput({
   };
 
   return (
-    <div className="border-t border-zinc-800 p-4">
+    <div className="border-t border-zinc-800 p-4 min-w-0 shrink-0">
       <div className="flex items-center gap-2 mb-2">
         <span className="w-2 h-2 rounded-full bg-amber-500" />
         <span className="text-xs text-zinc-400">Waiting for your input</span>
       </div>
-      <form onSubmit={handleSubmit} className="flex gap-2">
+      <form onSubmit={handleSubmit} className="flex gap-2 min-w-0 max-w-full">
         <textarea
           value={message}
           onChange={(e) => setMessage(e.target.value)}
           placeholder="Send a follow-up message..."
-          className="flex-1 bg-zinc-800 text-zinc-100 rounded-lg p-3 text-sm resize-none border border-zinc-700 focus:border-zinc-500 focus:outline-none placeholder-zinc-500"
+          className="min-w-0 flex-1 max-w-full bg-zinc-800 text-zinc-100 rounded-lg p-3 text-sm resize-none border border-zinc-700 focus:border-zinc-500 focus:outline-none placeholder-zinc-500"
           rows={2}
           onKeyDown={(e) => {
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
@@ -190,13 +250,21 @@ function FollowUpInput({
             }
           }}
         />
-        <div className="flex flex-col gap-2">
+        <div className="flex shrink-0 flex-col gap-2">
           <button
             type="submit"
             disabled={!message.trim()}
             className="bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-700 disabled:text-zinc-500 text-white text-sm font-medium py-2 px-4 rounded-lg transition-colors"
           >
             Send
+          </button>
+          <button
+            type="button"
+            onClick={onDownload}
+            className="bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 text-sm font-medium py-2 px-4 rounded-lg transition-colors border border-blue-600/30"
+            title="Download project files as zip"
+          >
+            Download
           </button>
           <button
             type="button"
@@ -224,6 +292,9 @@ function EventBlock({ event }: { event: EventDTO }) {
         </div>
       );
 
+    case "loop_step":
+      return null;
+
     case "text":
       return (
         <div className="prose prose-invert prose-sm max-w-none">
@@ -239,7 +310,7 @@ function EventBlock({ event }: { event: EventDTO }) {
               {data.toolName}
             </span>
           </div>
-          <pre className="p-3 text-xs text-zinc-300 overflow-x-auto">
+          <pre className="p-3 text-xs text-zinc-300 overflow-x-auto whitespace-pre-wrap break-words">
             {typeof data.input === "object"
               ? JSON.stringify(data.input, null, 2)
               : String(data.input)}

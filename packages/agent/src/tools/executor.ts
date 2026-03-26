@@ -1,4 +1,4 @@
-import { readFile, writeFile, readdir, stat, mkdir } from "fs/promises";
+import { readFile, writeFile, readdir, stat, mkdir, realpath, lstat } from "fs/promises";
 import { exec } from "child_process";
 import { resolve, dirname, relative } from "path";
 import { truncateToolResult } from "../context-window.js";
@@ -60,6 +60,124 @@ export function looksLikeBinary(buffer: Buffer): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Sensitive file filtering
+// ---------------------------------------------------------------------------
+
+/**
+ * File-name patterns that are hidden from directory listings and blocked
+ * from being read.  These typically contain credentials or agent-internal
+ * configuration that should never be exposed to end-users.
+ */
+const SENSITIVE_FILE_PATTERNS: RegExp[] = [
+  /^\.env(\..*)?$/,        // .env, .env.local, .env.production, …
+  /^\.netrc$/,
+  /^\.pgpass$/,
+  /^\.docker\/config\.json$/,
+];
+
+/** Returns true when a file name (basename) matches a sensitive pattern. */
+export function isSensitiveFile(name: string): boolean {
+  return SENSITIVE_FILE_PATTERNS.some((p) => p.test(name));
+}
+
+// ---------------------------------------------------------------------------
+// Command safety
+// ---------------------------------------------------------------------------
+
+/**
+ * Patterns that are blocked at the executor level because they are
+ * unambiguously dangerous regardless of context.
+ */
+const DANGEROUS_COMMAND_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
+  // Destructive filesystem operations targeting root / home
+  {
+    pattern: /rm\s+-[a-z]*r[a-z]*f\s+\//,
+    reason: "Recursive forced deletion of root or system paths is blocked.",
+  },
+  // Fork bombs
+  {
+    pattern: /:\(\)\s*\{.*:\|:/,
+    reason: "Fork bomb detected and blocked.",
+  },
+  // Reverse shells
+  {
+    pattern: /\/dev\/tcp\//,
+    reason: "Reverse shell via /dev/tcp is blocked.",
+  },
+  {
+    pattern: /\bnc\b.*-[a-z]*e\s/,
+    reason: "Reverse shell via netcat is blocked.",
+  },
+  {
+    pattern: /\bmkfifo\b.*\bnc\b/,
+    reason: "Reverse shell via mkfifo/netcat is blocked.",
+  },
+  // Pipe remote content into a shell
+  {
+    pattern: /curl\s.*\|\s*(ba)?sh/,
+    reason: "Piping curl output into a shell is blocked.",
+  },
+  {
+    pattern: /wget\s.*\|\s*(ba)?sh/,
+    reason: "Piping wget output into a shell is blocked.",
+  },
+  // Encoded payload execution
+  {
+    pattern: /base64\s.*\|\s*(ba)?sh/,
+    reason: "Executing base64-decoded payloads via shell is blocked.",
+  },
+  // Data exfiltration: curl/wget sending data to external URLs
+  {
+    pattern: /curl\s.*(-d\s|--data)/,
+    reason: "Sending data via curl is blocked. Use curl for GET requests only.",
+  },
+  {
+    pattern: /wget\s.*--post/,
+    reason: "Sending POST data via wget is blocked.",
+  },
+];
+
+/**
+ * Check a command against the blocklist. Returns a rejection message
+ * if the command is dangerous, or null if it is allowed.
+ */
+export function checkDangerousCommand(command: string): string | null {
+  for (const { pattern, reason } of DANGEROUS_COMMAND_PATTERNS) {
+    if (pattern.test(command)) {
+      return `Command blocked: ${reason}`;
+    }
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Symlink safety
+// ---------------------------------------------------------------------------
+
+/**
+ * Verify that the real (symlink-resolved) path of a file is still inside
+ * the working directory.  Throws if the resolved target escapes the sandbox.
+ */
+async function safeRealPath(
+  workingDir: string,
+  logicalPath: string
+): Promise<string> {
+  // First check if the path itself is a symlink
+  const fileStat = await lstat(logicalPath);
+  if (fileStat.isSymbolicLink()) {
+    const real = await realpath(logicalPath);
+    const rel = relative(workingDir, real);
+    if (rel.startsWith("..") || resolve(workingDir, rel) !== real) {
+      throw new Error(
+        `Symlink target resolves outside the working directory. Access denied.`
+      );
+    }
+    return real;
+  }
+  return logicalPath;
+}
+
+// ---------------------------------------------------------------------------
 // Tool implementations
 // ---------------------------------------------------------------------------
 
@@ -102,10 +220,22 @@ async function readFileTool(
   path: string,
   workingDir: string
 ): Promise<ToolResult> {
+  // Block reads of sensitive files (e.g. .env)
+  const basename = path.split("/").pop() ?? path;
+  if (isSensitiveFile(basename)) {
+    return {
+      output: `Reading "${path}" is blocked because it may contain secrets or credentials.`,
+      isError: true,
+    };
+  }
+
   const fullPath = safePath(workingDir, path);
 
+  // Resolve symlinks and verify target stays inside workspace
+  const resolvedPath = await safeRealPath(workingDir, fullPath);
+
   // Check file size before reading
-  const fileStat = await stat(fullPath);
+  const fileStat = await stat(resolvedPath);
   if (fileStat.size > MAX_READ_FILE_SIZE) {
     return {
       output: `File is too large (${(fileStat.size / 1024 / 1024).toFixed(1)} MB, max ${MAX_READ_FILE_SIZE / 1024 / 1024} MB). Use execute_command with head/tail to read portions.`,
@@ -114,7 +244,7 @@ async function readFileTool(
   }
 
   // Read as buffer first to check for binary
-  const buffer = await readFile(fullPath);
+  const buffer = await readFile(resolvedPath);
   if (looksLikeBinary(buffer)) {
     return {
       output: `File "${path}" appears to be a binary file and cannot be displayed as text.`,
@@ -142,6 +272,12 @@ async function executeCommandTool(
   workingDir: string,
   timeout: number
 ): Promise<ToolResult> {
+  // Check against dangerous command blocklist
+  const blocked = checkDangerousCommand(command);
+  if (blocked) {
+    return { output: blocked, isError: true };
+  }
+
   return new Promise((resolvePromise) => {
     exec(
       command,
@@ -194,7 +330,10 @@ async function listDirectoryTool(
   workingDir: string
 ): Promise<ToolResult> {
   const fullPath = safePath(workingDir, path);
-  const entries = await readdir(fullPath);
+  const rawEntries = await readdir(fullPath);
+
+  // Filter out sensitive files so they are never revealed to the user
+  const entries = rawEntries.filter((e) => !isSensitiveFile(e));
 
   if (entries.length > MAX_DIR_ENTRIES) {
     // Only stat and return the first MAX_DIR_ENTRIES entries

@@ -21,7 +21,8 @@ export type EventType =
   | "tool_result"
   | "error"
   | "session_complete"
-  | "user_message";
+  | "user_message"
+  | "loop_step";
 
 // --- Agent -> Server Messages ---
 
@@ -62,6 +63,7 @@ export interface ServerSessionAssignMessage {
   type: "server:session:assign";
   sessionId: string;
   prompt: string;
+  repoUrl?: string;
 }
 
 export interface ServerSessionStopMessage {
@@ -76,6 +78,7 @@ export interface ServerSessionContinueMessage {
   /** The original session prompt, needed to reconstruct valid message history. */
   sessionPrompt: string;
   history: Array<{ type: string; data: Record<string, unknown> }>;
+  repoUrl?: string;
 }
 
 export interface ServerPongMessage {
@@ -131,6 +134,12 @@ export interface UserMessageEvent {
   content: string;
 }
 
+/** Progress hint for UIs while the agent is between streamed tokens (model call, tools, compaction). */
+export interface LoopStepEvent {
+  type: "loop_step";
+  message: string;
+}
+
 export type SessionEvent =
   | ThinkingEvent
   | TextEvent
@@ -138,4 +147,5 @@ export type SessionEvent =
   | ToolResultEvent
   | ErrorEvent
   | SessionCompleteEvent
-  | UserMessageEvent;
+  | UserMessageEvent
+  | LoopStepEvent;

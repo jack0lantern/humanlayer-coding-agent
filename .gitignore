@@ -5,3 +5,13 @@ dist/
 *.tsbuildinfo
 STUDY_GUIDE.md
 .server-port
+
+# Files created by the headless coding agent (write_file / commands) on the host.
+# Docker Compose uses a named volume instead; see docker-compose.yml.
+.agent-workspace/
+
+# Claude Code local-only settings
+.claude/settings.local.json
+
+# Cursor: agent plan scratch (rules under .cursor/rules/ stay tracked)
+.cursor/plans/

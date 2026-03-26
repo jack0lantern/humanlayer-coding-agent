@@ -21,6 +21,7 @@ export interface SessionDTO {
   id: string;
   agentId: string | null;
   prompt: string;
+  repoUrl: string | null;
   status: SessionStatus;
   createdAt: string;
   startedAt: string | null;
@@ -42,6 +43,7 @@ export interface EventDTO {
 
 export interface CreateSessionRequest {
   prompt: string;
+  repoUrl?: string;
 }
 
 export interface CreateSessionResponse {

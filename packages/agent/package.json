@@ -12,7 +12,7 @@
     "coding-agent": "./dist/index.js"
   },
   "scripts": {
-    "dev": "tsx watch src/index.ts",
+    "dev": "tsx watch src/index.ts --working-dir ../../.agent-workspace",
     "build": "tsc",
     "start": "tsx src/index.ts",
     "test": "vitest run",

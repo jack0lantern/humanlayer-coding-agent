@@ -1,18 +1,21 @@
 import { useState } from "react";
 
 interface CreateSessionProps {
-  onSubmit: (prompt: string) => void;
+  onSubmit: (prompt: string, repoUrl?: string) => void;
   isDisabled: boolean;
 }
 
 export function CreateSession({ onSubmit, isDisabled }: CreateSessionProps) {
   const [prompt, setPrompt] = useState("");
+  const [repoUrl, setRepoUrl] = useState("");
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (prompt.trim() && !isDisabled) {
-      onSubmit(prompt.trim());
+      onSubmit(prompt.trim(), repoUrl.trim() || undefined);
       setPrompt("");
+      setRepoUrl("");
     }
   };
 
@@ -30,6 +33,22 @@ export function CreateSession({ onSubmit, isDisabled }: CreateSessionProps) {
           }
         }}
       />
+      <button
+        type="button"
+        onClick={() => setShowAdvanced(!showAdvanced)}
+        className="mt-1 text-xs text-zinc-500 hover:text-zinc-400 transition-colors"
+      >
+        {showAdvanced ? "Hide options" : "Repository URL..."}
+      </button>
+      {showAdvanced && (
+        <input
+          type="text"
+          value={repoUrl}
+          onChange={(e) => setRepoUrl(e.target.value)}
+          placeholder="https://github.com/org/repo (optional)"
+          className="mt-1 w-full bg-zinc-800 text-zinc-100 rounded-lg p-2 text-sm border border-zinc-700 focus:border-zinc-500 focus:outline-none placeholder-zinc-500"
+        />
+      )}
       <button
         type="submit"
         disabled={!prompt.trim() || isDisabled}

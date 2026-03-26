@@ -122,6 +122,8 @@ npm run db:push -w packages/server
 npm run dev
 ```
 
+Agent sessions write files under `.agent-workspace/` (repo root). That directory is gitignored so generated projects do not pollute commits. Docker Compose keeps workspaces in a named volume instead.
+
 ## Future Items
 
 - **Multi-session support** — allow the agent to handle multiple sessions concurrently

@@ -44,13 +44,15 @@ program
       process.exit(1);
     }
 
+    const workingDir = resolve(process.cwd(), options.workingDir);
+
     console.log(`Coding Agent starting...`);
     console.log(`  Server URL: ${options.serverUrl}`);
-    console.log(`  Working Dir: ${options.workingDir}`);
+    console.log(`  Working Dir: ${workingDir}`);
 
     startWSClient({
       serverUrl: options.serverUrl,
-      workingDir: options.workingDir,
+      workingDir,
       apiKey,
     });
   });

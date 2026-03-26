@@ -27,10 +27,10 @@ export const api = {
   sessions: {
     list: () => request<ListSessionsResponse>("/sessions"),
     get: (id: string) => request<GetSessionResponse>(`/sessions/${id}`),
-    create: (prompt: string) =>
+    create: (prompt: string, repoUrl?: string) =>
       request<CreateSessionResponse>("/sessions", {
         method: "POST",
-        body: JSON.stringify({ prompt }),
+        body: JSON.stringify({ prompt, ...(repoUrl && { repoUrl }) }),
       }),
     stop: (id: string) =>
       request<StopSessionResponse>(`/sessions/${id}/stop`, {
@@ -47,6 +47,23 @@ export const api = {
       request<EndSessionResponse>(`/sessions/${id}/end`, {
         method: "POST",
       }),
+    download: async (id: string) => {
+      const res = await fetch(`${BASE}/sessions/${id}/download`);
+      if (!res.ok) {
+        const error = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(error.error || res.statusText);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `session-${id.slice(0, 8)}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      // Delay revocation so the browser has time to start the download
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    },
   },
   agents: {
     list: () => request<ListAgentsResponse>("/agents"),
