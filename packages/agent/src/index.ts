@@ -44,7 +44,10 @@ program
       process.exit(1);
     }
 
-    const workingDir = resolve(process.cwd(), options.workingDir);
+    // Prefer WORKSPACE_DIR so the agent base matches the server download path and Docker volume.
+    const workingDir = process.env.WORKSPACE_DIR?.trim()
+      ? resolve(process.env.WORKSPACE_DIR.trim())
+      : resolve(process.cwd(), options.workingDir);
 
     console.log(`Coding Agent starting...`);
     console.log(`  Server URL: ${options.serverUrl}`);

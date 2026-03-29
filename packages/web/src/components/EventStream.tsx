@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import type { EventDTO } from "@codingagent/shared";
-import Markdown from "react-markdown";
+import { MarkdownContent } from "./MarkdownContent";
+import { CodeSampleBox } from "./CodeSampleBox";
 
 function ConfirmDialog({
   title,
@@ -298,44 +299,32 @@ function EventBlock({ event }: { event: EventDTO }) {
     case "text":
       return (
         <div className="prose prose-invert prose-sm max-w-none">
-          <Markdown>{data.content}</Markdown>
+          <MarkdownContent>{data.content}</MarkdownContent>
         </div>
       );
 
-    case "tool_call":
+    case "tool_call": {
+      const inputText =
+        typeof data.input === "object"
+          ? JSON.stringify(data.input, null, 2)
+          : String(data.input);
       return (
-        <div className="bg-zinc-900 rounded-lg border border-zinc-800 overflow-hidden">
-          <div className="flex items-center gap-2 px-3 py-2 bg-zinc-800/50 border-b border-zinc-800">
-            <span className="text-xs font-mono text-blue-400">
-              {data.toolName}
-            </span>
-          </div>
-          <pre className="p-3 text-xs text-zinc-300 overflow-x-auto whitespace-pre-wrap break-words">
-            {typeof data.input === "object"
-              ? JSON.stringify(data.input, null, 2)
-              : String(data.input)}
-          </pre>
-        </div>
+        <CodeSampleBox
+          code={inputText}
+          label={String(data.toolName)}
+          labelClassName="text-blue-400"
+        />
       );
+    }
 
     case "tool_result":
       return (
-        <div
-          className={`bg-zinc-900 rounded-lg border overflow-hidden ${
-            data.isError ? "border-red-800/50" : "border-zinc-800"
-          }`}
-        >
-          <div className="flex items-center gap-2 px-3 py-2 bg-zinc-800/50 border-b border-zinc-800">
-            <span
-              className={`text-xs font-mono ${data.isError ? "text-red-400" : "text-green-400"}`}
-            >
-              {data.isError ? "error" : "result"}
-            </span>
-          </div>
-          <pre className="p-3 text-xs text-zinc-300 overflow-x-auto max-h-64 overflow-y-auto whitespace-pre-wrap">
-            {data.output}
-          </pre>
-        </div>
+        <CodeSampleBox
+          code={String(data.output ?? "")}
+          label={data.isError ? "error" : "result"}
+          labelClassName={data.isError ? "text-red-400" : "text-green-400"}
+          className={data.isError ? "border-red-800/50" : ""}
+        />
       );
 
     case "user_message":
@@ -343,7 +332,7 @@ function EventBlock({ event }: { event: EventDTO }) {
         <div className="bg-blue-950/20 border border-blue-800/30 rounded-lg p-3">
           <span className="text-xs text-blue-400 font-medium">You</span>
           <div className="prose prose-invert prose-sm max-w-none mt-1">
-            <Markdown>{data.content}</Markdown>
+            <MarkdownContent>{data.content}</MarkdownContent>
           </div>
         </div>
       );

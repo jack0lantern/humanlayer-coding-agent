@@ -1,5 +1,5 @@
 import { existsSync, readdirSync } from "fs";
-import { join } from "path";
+import { resolve } from "path";
 import archiver from "archiver";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
@@ -348,6 +348,38 @@ sessions.post("/:id/end", async (c) => {
   return c.json({ session: toSessionDTO(updated) });
 });
 
+function sessionWorkspaceHasFiles(absDir: string): boolean {
+  try {
+    return existsSync(absDir) && readdirSync(absDir).length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Prefer WORKSPACE_DIR (Docker volume) but fall back to the agent's registered base
+ * so local dev still works when only one path has content.
+ */
+function resolveDownloadableSessionDir(
+  sessionId: string,
+  agentWorkingDir: string | null
+): string | null {
+  const candidates: string[] = [];
+  const envRoot = process.env.WORKSPACE_DIR?.trim();
+  if (envRoot) candidates.push(resolve(envRoot, sessionId));
+  if (agentWorkingDir)
+    candidates.push(resolve(agentWorkingDir, sessionId));
+
+  const seen = new Set<string>();
+  for (const dir of candidates) {
+    const abs = resolve(dir);
+    if (seen.has(abs)) continue;
+    seen.add(abs);
+    if (sessionWorkspaceHasFiles(abs)) return abs;
+  }
+  return null;
+}
+
 // GET /api/sessions/:id/download - Download session workspace as zip
 sessions.get("/:id/download", async (c) => {
   const sessionId = c.req.param("id");
@@ -368,27 +400,19 @@ sessions.get("/:id/download", async (c) => {
     return c.json({ error: "Session is still running. Wait for it to finish before downloading." }, 400);
   }
 
-  // Resolve workspace directory: WORKSPACE_DIR env or fall back to agent's registered workingDir
-  const workspaceBase = process.env.WORKSPACE_DIR;
-  if (!workspaceBase) {
-    // Fall back to agent's workingDir from DB
-    const agent = session.agentId
-      ? await prisma.agent.findUnique({ where: { id: session.agentId } })
-      : null;
-    const fallbackDir = agent?.workingDir;
-    if (!fallbackDir) {
-      return c.json({ error: "Workspace directory not configured" }, 500);
-    }
-    // Use fallback with session subdirectory
-    const sessionDir = join(fallbackDir, sessionId);
-    if (!existsSync(sessionDir) || readdirSync(sessionDir).length === 0) {
-      return c.json({ error: "No files found for this session" }, 404);
-    }
-    return streamZip(c, sessionDir, sessionId);
+  const agent = session.agentId
+    ? await prisma.agent.findUnique({ where: { id: session.agentId } })
+    : null;
+
+  if (!process.env.WORKSPACE_DIR?.trim() && !agent?.workingDir) {
+    return c.json({ error: "Workspace directory not configured" }, 500);
   }
 
-  const sessionDir = join(workspaceBase, sessionId);
-  if (!existsSync(sessionDir) || readdirSync(sessionDir).length === 0) {
+  const sessionDir = resolveDownloadableSessionDir(
+    sessionId,
+    agent?.workingDir ?? null
+  );
+  if (!sessionDir) {
     return c.json({ error: "No files found for this session" }, 404);
   }
 

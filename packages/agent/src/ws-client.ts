@@ -3,9 +3,11 @@ import Anthropic from "@anthropic-ai/sdk";
 import { randomUUID } from "crypto";
 import { execFile } from "child_process";
 import { existsSync, mkdirSync } from "fs";
+import { cp, rm } from "fs/promises";
 import { join, resolve, relative } from "path";
 import { promisify } from "util";
 import { runAgentLoop } from "./agent-loop.js";
+import { gatherLooseFilesIntoSessionDir } from "./workspace-hoist.js";
 import type {
   AgentMessage,
   ServerMessage,
@@ -56,6 +58,30 @@ function truncateEventForWS(event: SessionEvent): SessionEvent {
  * and must resolve within this directory. If unset, local paths are rejected.
  */
 const SOURCE_REPOS_DIR = process.env.SOURCE_REPOS_DIR || "";
+
+/**
+ * When the process writes under one base (e.g. CLI --working-dir) but WORKSPACE_DIR
+ * points at the shared volume path the server zips, mirror the session folder there
+ * after each run so downloads see the same files.
+ */
+async function publishSessionWorkspaceIfNeeded(
+  sessionDir: string,
+  sessionId: string
+): Promise<void> {
+  const volumeRoot = process.env.WORKSPACE_DIR?.trim();
+  if (!volumeRoot) return;
+
+  const src = resolve(sessionDir);
+  const dest = resolve(join(volumeRoot, sessionId));
+  if (src === dest) return;
+
+  try {
+    await rm(dest, { recursive: true, force: true });
+  } catch {
+    // dest may not exist yet
+  }
+  await cp(src, dest, { recursive: true });
+}
 
 /**
  * Initialize a session workspace by cloning a git repo or copying a local directory.
@@ -358,19 +384,24 @@ export function startWSClient(options: WSClientOptions) {
             }
 
             // Run agent loop
-            await runAgentLoop({
-              prompt: message.prompt,
-              workingDir: sessionDir,
-              apiKey,
-              onEvent: (event: SessionEvent) => {
-                send({
-                  type: "agent:event",
-                  sessionId: message.sessionId,
-                  event: truncateEventForWS(event),
-                });
-              },
-              shouldStop: () => stopFlag,
-            });
+            try {
+              await runAgentLoop({
+                prompt: message.prompt,
+                workingDir: sessionDir,
+                apiKey,
+                onEvent: (event: SessionEvent) => {
+                  send({
+                    type: "agent:event",
+                    sessionId: message.sessionId,
+                    event: truncateEventForWS(event),
+                  });
+                },
+                shouldStop: () => stopFlag,
+              });
+            } finally {
+              await gatherLooseFilesIntoSessionDir(sessionDir, workingDir);
+              await publishSessionWorkspaceIfNeeded(sessionDir, message.sessionId);
+            }
 
             console.log(`Session ${message.sessionId} finished`);
             break;
@@ -398,20 +429,28 @@ export function startWSClient(options: WSClientOptions) {
             );
 
             // Run agent loop with history
-            await runAgentLoop({
-              prompt: message.followUpMessage,
-              workingDir: continueDir,
-              apiKey,
-              onEvent: (event: SessionEvent) => {
-                send({
-                  type: "agent:event",
-                  sessionId: message.sessionId,
-                  event: truncateEventForWS(event),
-                });
-              },
-              shouldStop: () => stopFlag,
-              previousMessages,
-            });
+            try {
+              await runAgentLoop({
+                prompt: message.followUpMessage,
+                workingDir: continueDir,
+                apiKey,
+                onEvent: (event: SessionEvent) => {
+                  send({
+                    type: "agent:event",
+                    sessionId: message.sessionId,
+                    event: truncateEventForWS(event),
+                  });
+                },
+                shouldStop: () => stopFlag,
+                previousMessages,
+              });
+            } finally {
+              await gatherLooseFilesIntoSessionDir(continueDir, workingDir);
+              await publishSessionWorkspaceIfNeeded(
+                continueDir,
+                message.sessionId
+              );
+            }
 
             console.log(`Session ${message.sessionId} turn finished`);
             break;

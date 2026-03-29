@@ -62,6 +62,8 @@ services:
     environment:
       AGENT_SERVER_URL: http://server:3000
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      # Must match server WORKSPACE_DIR so per-session dirs live on the shared volume.
+      WORKSPACE_DIR: /workspace
       # SOURCE_REPOS_DIR: /repos  # Enable local path copies from mounted repos
     volumes:
       - workspace:/workspace

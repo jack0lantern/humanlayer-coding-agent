@@ -12,6 +12,7 @@ graph TB
 
     subgraph "Data Layer"
         PostgreSQL["🗄️ PostgreSQL v16<br/>Agents, Sessions, Events"]
+        WorkspaceVol["💾 Workspace volume<br/>Docker named volume<br/>/workspace"]
     end
 
     subgraph "External Services"
@@ -25,6 +26,8 @@ graph TB
     WebUI -->|SSE + REST API| Server
     Server -->|WebSocket<br/>bidirectional| Agent
     Server -->|Prisma ORM<br/>read/write| PostgreSQL
+    WorkspaceVol -->|reads session files<br/>for download| Server
+    Agent -->|writes via<br/>tool execution| WorkspaceVol
     Agent -->|HTTPS API calls| AnthropicAPI
 
     WebUI -.->|imports types| SharedTypes
@@ -35,12 +38,16 @@ graph TB
     classDef database fill:#18181B,stroke:#F59E0B,stroke-width:2px,color:#fff
     classDef external fill:#18181B,stroke:#EF4444,stroke-width:2px,color:#fff
     classDef types fill:#18181B,stroke:#EC4899,stroke-width:2px,color:#fff
+    classDef volume fill:#18181B,stroke:#06B6D4,stroke-width:2px,color:#fff
 
     class WebUI,Server,Agent service
     class PostgreSQL database
+    class WorkspaceVol volume
     class AnthropicAPI external
     class SharedTypes types
 ```
+
+
 
 ### Data Flow Diagram
 
@@ -51,6 +58,7 @@ graph LR
     Server["Server<br/>Hono"]
     Agent["Agent<br/>Claude"]
     DB["PostgreSQL<br/>Data"]
+    WS["Workspace vol<br/>/workspace"]
     API["Anthropic<br/>API"]
 
     User -->|HTTP/REST| WebUI
@@ -58,6 +66,8 @@ graph LR
     WebUI -->|SSE /stream| Server
     Server -->|WS /agent| Agent
     Server -->|ORM queries| DB
+    WS -->|reads for download| Server
+    Agent -->|writes files| WS
     Agent -->|Claude API| API
 
     style User fill:#E4E4E7,stroke:#333,color:#000
@@ -65,29 +75,38 @@ graph LR
     style Server fill:#10B981,stroke:#065F46,color:#fff
     style Agent fill:#8B5CF6,stroke:#5B21B6,color:#fff
     style DB fill:#F59E0B,stroke:#92400E,color:#fff
+    style WS fill:#06B6D4,stroke:#0E7490,color:#fff
     style API fill:#EF4444,stroke:#7F1D1D,color:#fff
 ```
 
+
+
 ## Key Connections (What EXISTS)
 
-| From | To | Protocol | Purpose |
-|------|-----|----------|---------|
-| Web UI | Server | REST API | Create/list sessions, download workspace |
-| Web UI | Server | SSE | Real-time event streaming |
-| Server | Agent | WebSocket | Task assignment, heartbeat, event reporting |
-| **Server** | **PostgreSQL** | **Prisma ORM** | **Persistent state (agents, sessions, events)** |
-| Agent | Anthropic API | HTTPS | Claude model inference & tool execution |
-| All packages | Shared Types | TypeScript imports | Type-safe contracts |
+
+| From         | To                   | Protocol                      | Purpose                                         |
+| ------------ | -------------------- | ----------------------------- | ----------------------------------------------- |
+| Web UI       | Server               | REST API                      | Create/list sessions, download workspace        |
+| Web UI       | Server               | SSE                           | Real-time event streaming                       |
+| Server       | Agent                | WebSocket                     | Task assignment, heartbeat, event reporting       |
+| **Server**   | **PostgreSQL**       | **Prisma ORM**                | **Persistent state (agents, sessions, events)** |
+| **Server**   | **Workspace volume** | **Shared mount `/workspace`** | **Reads session dirs for workspace download**   |
+| **Agent**    | **Workspace volume** | **Shared mount `/workspace`** | **Writes files via tool execution (file I/O)**  |
+| Agent        | Anthropic API        | HTTPS                         | Claude model inference & tool execution         |
+| All packages | Shared Types         | TypeScript imports            | Type-safe contracts                             |
+
 
 ## Key Connections (What Does NOT Exist)
 
-| Component A | Component B | Why Not |
-|------------|------------|---------|
-| **Agent** | **PostgreSQL** | ❌ Agent is stateless; Server handles all persistence |
-| **Web UI** | **PostgreSQL** | ❌ Web UI never queries DB directly; Server is the gateway |
-| **Web UI** | **Agent** | ❌ No direct connection; Server mediates all communication |
-| **Web UI** | **Anthropic API** | ❌ Web UI never calls Claude directly; Agent owns this |
-| **Agent** | **Agent** | ❌ Single agent model; only one agent connects at a time |
+
+| Component A | Component B       | Why Not                                                   |
+| ----------- | ----------------- | --------------------------------------------------------- |
+| **Agent**   | **PostgreSQL**    | ❌ Agent is stateless; Server handles all persistence      |
+| **Web UI**  | **PostgreSQL**    | ❌ Web UI never queries DB directly; Server is the gateway |
+| **Web UI**  | **Agent**         | ❌ No direct connection; Server mediates all communication |
+| **Web UI**  | **Anthropic API** | ❌ Web UI never calls Claude directly; Agent owns this     |
+| **Agent**   | **Agent**         | ❌ Single agent model; only one agent connects at a time   |
+
 
 ### Critical Architectural Boundary
 
@@ -101,11 +120,13 @@ graph LR
 ## Component Details
 
 ### Web UI (React + Vite)
+
 - **Responsibilities**: Session management UI, real-time event display, workspace download
 - **Connections**: SSE stream from Server for events, REST API for CRUD operations
 - **Port**: 5173 (dev), 80 (prod/nginx)
 
 ### Server (Hono + Prisma)
+
 - **Responsibilities**: API orchestration, WebSocket gateway, event streaming, state persistence
 - **Features**:
   - REST endpoints for sessions & agents
@@ -115,6 +136,7 @@ graph LR
 - **Port**: 3000
 
 ### Agent (Claude AI CLI)
+
 - **Responsibilities**: Run agentic loop, execute tools, manage workspace
 - **Features**:
   - Claude API integration
@@ -124,17 +146,20 @@ graph LR
 - **Port**: None (CLI process, connects to Server via WebSocket)
 
 ### PostgreSQL v16
+
 - **Stores**: Agents, Sessions, Events tables
 - **ORM**: Prisma (schema-driven migrations)
 - **Port**: 5432
 
 ### Shared Types (TypeScript)
+
 - **Protocol types**: WebSocket message contracts
 - **Event types**: SSE event definitions
 - **API types**: REST endpoint contracts
 - **Imported by**: All packages (zero runtime dependencies)
 
 ### Anthropic API (External)
+
 - **Claude model inference** via @anthropic-ai/sdk
 - **Tool definitions** for agent execution
 - **Context window management** (200k token limit)
@@ -148,7 +173,7 @@ agent (Node.js CLI)    # Agentic executor
 web (nginx)            # React frontend
 ```
 
-All services share `/workspace` volume for per-session file isolation.
+**Server** and **agent** share the Docker named volume `workspace` mounted at `/workspace` (`WORKSPACE_DIR`) so both see the same per-session directories; **web** and **postgres** do not mount it.
 
 ## Data Flow Example: Session Creation
 
